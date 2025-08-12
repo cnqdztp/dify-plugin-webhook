@@ -1,9 +1,11 @@
 import json
 import logging
+import asyncio
 from typing import Mapping, Dict, Any, Optional
 from werkzeug import Request, Response
 from dify_plugin import Endpoint
 from endpoints.helpers import apply_middleware, validate_api_key, determine_route
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +150,15 @@ class WebhookEndpoint(Endpoint):
                 # Invoking workflow
                 response = self._invoke_workflow(
                     static_app_id, inputs, settings.get('raw_data_output', False))
+                
+                # Send callback if configured for static app
+                if static_app_id and settings.get('callback_url'):
+                    self._send_callback_async(
+                        settings.get('callback_url'),
+                        settings.get('callback_secret_token'),
+                        response,
+                        static_app_id
+                    )
 
             if not response:
                 return Response(json.dumps({"error": "Failed to get response"}), status=500, content_type="application/json")
@@ -205,3 +216,85 @@ class WebhookEndpoint(Endpoint):
 
         # Process workflow response if raw_data_output is enabled
         return dify_response["data"]["outputs"] if raw_data_output else dify_response
+    
+    def _send_callback_async(self, callback_url: str, secret_token: Optional[str], 
+                            workflow_response: Dict[str, Any], app_id: str) -> None:
+        """
+        Sends an asynchronous callback with workflow results.
+        
+        Args:
+            callback_url: The URL to send the callback to
+            secret_token: Optional secret token for authentication
+            workflow_response: The workflow response data to send
+            app_id: The app ID that generated this response
+        """
+        try:
+            # Run callback in background to avoid blocking the main response
+            asyncio.create_task(self._send_callback(
+                callback_url, secret_token, workflow_response, app_id
+            ))
+            logger.info("Scheduled callback to %s for app_id: %s", callback_url, app_id)
+        except Exception as e:
+            logger.error("Failed to schedule callback: %s", str(e))
+    
+    async def _send_callback(self, callback_url: str, secret_token: Optional[str],
+                           workflow_response: Dict[str, Any], app_id: str) -> None:
+        """
+        Sends a callback HTTP request with workflow results.
+        
+        Args:
+            callback_url: The URL to send the callback to
+            secret_token: Optional secret token for authentication
+            workflow_response: The workflow response data to send
+            app_id: The app ID that generated this response
+        """
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Dify-Webhook-Plugin/1.0"
+        }
+        
+        if secret_token:
+            headers["Authorization"] = f"Bearer {secret_token}"
+        
+        callback_payload = {
+            "app_id": app_id,
+            "timestamp": workflow_response.get("created_at"),
+            "workflow_run_id": workflow_response.get("workflow_run_id"),
+            "data": workflow_response
+        }
+        
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        callback_url,
+                        json=callback_payload,
+                        headers=headers
+                    )
+                    
+                    if response.status_code in [200, 201, 202, 204]:
+                        logger.info(
+                            "Callback sent successfully to %s (status: %d) for app_id: %s",
+                            callback_url, response.status_code, app_id
+                        )
+                        return
+                    else:
+                        logger.warning(
+                            "Callback failed with status %d: %s for app_id: %s", 
+                            response.status_code, response.text, app_id
+                        )
+                        
+            except httpx.TimeoutException:
+                logger.error("Callback timeout (attempt %d/%d) to %s for app_id: %s", 
+                           attempt + 1, max_retries, callback_url, app_id)
+            except Exception as e:
+                logger.error("Callback error (attempt %d/%d) to %s for app_id: %s: %s", 
+                           attempt + 1, max_retries, callback_url, app_id, str(e))
+            
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
+        
+        logger.error("All callback attempts failed for %s, app_id: %s", callback_url, app_id)

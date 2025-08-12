@@ -117,6 +117,38 @@ settings:
       en_US: Send res.body.data instead of res.body as workflow response.
       zh_Hans: 发送 res.body.data 作为工作流响应，而不是 res.body。
       pt_BR: Envie res.body.data como resposta do fluxo de trabalho em vez de res.body.
+
+  - name: callback_url
+    type: text-input
+    required: false
+    label:
+      en_US: Callback URL
+      zh_Hans: 回调URL
+      pt_BR: URL de Callback
+    placeholder:
+      en_US: https://example.com/webhook-callback
+      zh_Hans: https://example.com/webhook-callback
+      pt_BR: https://example.com/webhook-callback
+    helper:
+      en_US: When a static app is selected, workflow results will be sent to this URL via POST request
+      zh_Hans: 当选择了静态应用程序时，工作流结果将通过POST请求发送到此URL
+      pt_BR: Quando um aplicativo estático é selecionado, os resultados do workflow serão enviados para este URL via solicitação POST
+
+  - name: callback_secret_token
+    type: secret-input
+    required: false
+    label:
+      en_US: Callback Secret Token
+      zh_Hans: 回调密钥令牌
+      pt_BR: Token Secreto de Callback
+    placeholder:
+      en_US: Bearer token for callback authentication
+      zh_Hans: 用于回调认证的Bearer令牌
+      pt_BR: Token Bearer para autenticação de callback
+    helper:
+      en_US: This token will be sent as Authorization Bearer header in callback requests
+      zh_Hans: 此令牌将作为Authorization Bearer头在回调请求中发送
+      pt_BR: Este token será enviado como cabeçalho Authorization Bearer nas solicitações de callback
 endpoints:
   - endpoints/dynamic_workflow.yaml
   - endpoints/dynamic_chatflow.yaml

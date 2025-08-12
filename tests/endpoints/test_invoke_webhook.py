@@ -2,7 +2,7 @@
 
 import json
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, AsyncMock
 from werkzeug import Request, Response
 from dify_plugin.core.runtime import Session
 from endpoints.invoke_endpoint import WebhookEndpoint
@@ -752,6 +752,123 @@ class TestWebhookEndpoint(unittest.TestCase):
             inputs={"param1": "value1"},
             response_mode="blocking"
         )
+
+    # CALLBACK FUNCTIONALITY TESTS
+
+    @patch('endpoints.invoke_endpoint.apply_middleware')
+    @patch('endpoints.invoke_endpoint.validate_api_key')
+    @patch('asyncio.create_task')
+    def test_callback_triggered_on_single_workflow(self, mock_create_task, mock_validate_api_key, mock_apply_middleware):
+        """Tests that callback is triggered for single-workflow when configured.
+        Ensures callback is scheduled for workflows with static app and callback URL."""
+        mock_apply_middleware.return_value = None
+        mock_validate_api_key.return_value = None
+
+        self.mock_request.get_json.return_value = {"inputs": {"param1": "value1"}}
+        self.mock_request.path = "/single-workflow"
+
+        # Settings with callback configuration
+        callback_settings = dict(self.default_settings)
+        callback_settings.update({
+            "callback_url": "https://example.com/callback",
+            "callback_secret_token": "secret-123"
+        })
+
+        response = self.endpoint._invoke(
+            self.mock_request, {}, callback_settings)
+
+        # Assert successful response
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.data), self.workflow_response)
+
+        # Assert callback task was created
+        mock_create_task.assert_called_once()
+
+    @patch('endpoints.invoke_endpoint.apply_middleware')
+    @patch('endpoints.invoke_endpoint.validate_api_key')
+    @patch('asyncio.create_task')
+    def test_callback_not_triggered_without_static_app(self, mock_create_task, mock_validate_api_key, mock_apply_middleware):
+        """Tests that callback is NOT triggered for dynamic workflows.
+        Ensures callback is only for static app configurations."""
+        mock_apply_middleware.return_value = None
+        mock_validate_api_key.return_value = None
+
+        self.mock_request.get_json.return_value = {"inputs": {"param1": "value1"}}
+        self.mock_request.path = "/workflow/test-app-id"
+
+        # Remove static_app_id to use dynamic routing
+        callback_settings = {
+            "callback_url": "https://example.com/callback",
+            "callback_secret_token": "secret-123",
+            "explicit_inputs": True,
+            "raw_data_output": False
+        }
+
+        response = self.endpoint._invoke(
+            self.mock_request, {"app_id": "test-app-id"}, callback_settings)
+
+        # Assert successful response
+        self.assertEqual(response.status_code, 200)
+
+        # Assert callback task was NOT created (no static app)
+        mock_create_task.assert_not_called()
+
+    @patch('endpoints.invoke_endpoint.apply_middleware')
+    @patch('endpoints.invoke_endpoint.validate_api_key')
+    @patch('asyncio.create_task')
+    def test_callback_not_triggered_without_url(self, mock_create_task, mock_validate_api_key, mock_apply_middleware):
+        """Tests that callback is NOT triggered when callback URL is not configured.
+        Ensures callback requires URL configuration."""
+        mock_apply_middleware.return_value = None
+        mock_validate_api_key.return_value = None
+
+        self.mock_request.get_json.return_value = {"inputs": {"param1": "value1"}}
+        self.mock_request.path = "/single-workflow"
+
+        # Settings without callback URL
+        no_callback_settings = dict(self.default_settings)
+        # callback_url is not set
+
+        response = self.endpoint._invoke(
+            self.mock_request, {}, no_callback_settings)
+
+        # Assert successful response
+        self.assertEqual(response.status_code, 200)
+
+        # Assert callback task was NOT created (no callback URL)
+        mock_create_task.assert_not_called()
+
+    @patch('endpoints.invoke_endpoint.apply_middleware')
+    @patch('endpoints.invoke_endpoint.validate_api_key')
+    @patch('asyncio.create_task')
+    def test_callback_not_triggered_on_chatflow(self, mock_create_task, mock_validate_api_key, mock_apply_middleware):
+        """Tests that callback is NOT triggered for chatflow endpoints.
+        Ensures callback is only for workflow endpoints."""
+        mock_apply_middleware.return_value = None
+        mock_validate_api_key.return_value = None
+
+        self.mock_request.get_json.return_value = {
+            "query": "What is the weather?",
+            "inputs": {}
+        }
+        self.mock_request.path = "/single-chatflow"
+
+        # Settings with callback configuration
+        callback_settings = dict(self.default_settings)
+        callback_settings.update({
+            "callback_url": "https://example.com/callback",
+            "callback_secret_token": "secret-123"
+        })
+
+        response = self.endpoint._invoke(
+            self.mock_request, {}, callback_settings)
+
+        # Assert successful response
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.data), self.chatflow_response)
+
+        # Assert callback task was NOT created (chatflow, not workflow)
+        mock_create_task.assert_not_called()
 
 
 if __name__ == '__main__':
